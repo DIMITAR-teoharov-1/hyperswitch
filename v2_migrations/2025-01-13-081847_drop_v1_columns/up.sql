@@ -130,5 +130,3 @@ ALTER TABLE refund
     DROP COLUMN IF EXISTS internal_reference_id,
     DROP COLUMN IF EXISTS refund_id,
     DROP COLUMN IF EXISTS merchant_connector_id;
-
-

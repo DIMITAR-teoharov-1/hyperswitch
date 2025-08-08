@@ -2,7 +2,7 @@
 use std::marker::PhantomData;
 
 #[cfg(feature = "v2")]
-use api_models::payments::{MerchantConnectorDetails, SessionToken, VaultSessionDetails};
+use api_models::payments::{SessionToken, VaultSessionDetails};
 #[cfg(feature = "v1")]
 use common_types::primitive_wrappers::{
     AlwaysRequestExtendedAuthorization, RequestExtendedAuthorizationBool,
@@ -115,6 +115,14 @@ pub struct PaymentIntent {
     pub force_3ds_challenge: Option<bool>,
     pub force_3ds_challenge_trigger: Option<bool>,
     pub is_iframe_redirection_enabled: Option<bool>,
+    pub is_payment_id_from_merchant: Option<bool>,
+    pub payment_channel: Option<common_enums::PaymentChannel>,
+    pub tax_status: Option<storage_enums::TaxStatus>,
+    pub discount_amount: Option<MinorUnit>,
+    pub order_date: Option<PrimitiveDateTime>,
+    pub shipping_amount_tax: Option<MinorUnit>,
+    pub duty_amount: Option<MinorUnit>,
+    pub enable_partial_authorization: Option<bool>,
 }
 
 impl PaymentIntent {
@@ -502,6 +510,10 @@ pub struct PaymentIntent {
 
     /// Indicates if the redirection has to open in the iframe
     pub is_iframe_redirection_enabled: Option<bool>,
+
+    /// Indicates whether the payment_id was provided by the merchant (true),
+    /// or generated internally by Hyperswitch (false)
+    pub is_payment_id_from_merchant: Option<bool>,
 }
 
 #[cfg(feature = "v2")]
@@ -668,6 +680,7 @@ impl PaymentIntent {
             processor_merchant_id: merchant_context.get_merchant_account().get_id().clone(),
             created_by: None,
             is_iframe_redirection_enabled: None,
+            is_payment_id_from_merchant: None,
         })
     }
 
@@ -738,6 +751,7 @@ impl PaymentIntent {
             network_error_message: None,
             retry_count: None,
             invoice_next_billing_time: None,
+            invoice_billing_started_at_time: None,
             card_isin: None,
             card_network: None,
             // No charge id is present here since it is an internal payment and we didn't call connector yet.
@@ -865,7 +879,7 @@ where
     pub payment_address: payment_address::PaymentAddress,
     pub mandate_data: Option<api_models::payments::MandateIds>,
     pub payment_method: Option<payment_methods::PaymentMethod>,
-    pub merchant_connector_details: Option<MerchantConnectorDetails>,
+    pub merchant_connector_details: Option<common_types::domain::MerchantConnectorAuthDetails>,
 }
 
 #[cfg(feature = "v2")]
@@ -918,7 +932,7 @@ where
     /// Should the payment status be synced with connector
     /// This will depend on the payment status and the force sync flag in the request
     pub should_sync_with_connector: bool,
-    pub merchant_connector_details: Option<MerchantConnectorDetails>,
+    pub merchant_connector_details: Option<common_types::domain::MerchantConnectorAuthDetails>,
 }
 
 #[cfg(feature = "v2")]
@@ -1062,6 +1076,9 @@ where
                     errors::api_error_response::ApiErrorResponse::InternalServerError
                 })?,
                 invoice_next_billing_time: self.revenue_recovery_data.invoice_next_billing_time,
+                invoice_billing_started_at_time: self
+                    .revenue_recovery_data
+                    .invoice_next_billing_time,
                 billing_connector_payment_method_details,
                 first_payment_attempt_network_advice_code: first_network_advice_code,
                 first_payment_attempt_network_decline_code: first_network_decline_code,

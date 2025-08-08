@@ -85,6 +85,8 @@ pub trait ConnectorErrorExt<T> {
     fn to_setup_mandate_failed_response(self) -> error_stack::Result<T, errors::ApiErrorResponse>;
     #[track_caller]
     fn to_dispute_failed_response(self) -> error_stack::Result<T, errors::ApiErrorResponse>;
+    #[track_caller]
+    fn to_files_failed_response(self) -> error_stack::Result<T, errors::ApiErrorResponse>;
     #[cfg(feature = "payouts")]
     #[track_caller]
     fn to_payout_failed_response(self) -> error_stack::Result<T, errors::ApiErrorResponse>;
@@ -439,6 +441,38 @@ impl<T> ConnectorErrorExt<T> for error_stack::Result<T, errors::ConnectorError> 
         })
     }
 
+    fn to_files_failed_response(self) -> error_stack::Result<T, errors::ApiErrorResponse> {
+        self.map_err(|err| {
+            let error = match err.current_context() {
+                errors::ConnectorError::ProcessingStepFailed(Some(bytes)) => {
+                    let response_str = std::str::from_utf8(bytes);
+                    let data = match response_str {
+                        Ok(s) => serde_json::from_str(s)
+                            .map_err(
+                                |error| logger::error!(%error,"Failed to convert response to JSON"),
+                            )
+                            .ok(),
+                        Err(error) => {
+                            logger::error!(%error,"Failed to convert response to UTF8 string");
+                            None
+                        }
+                    };
+                    errors::ApiErrorResponse::DisputeFailed { data }
+                }
+                errors::ConnectorError::MissingRequiredField { field_name } => {
+                    errors::ApiErrorResponse::MissingRequiredField { field_name }
+                }
+                errors::ConnectorError::MissingRequiredFields { field_names } => {
+                    errors::ApiErrorResponse::MissingRequiredFields {
+                        field_names: field_names.to_vec(),
+                    }
+                }
+                _ => errors::ApiErrorResponse::InternalServerError,
+            };
+            err.change_context(error)
+        })
+    }
+
     #[cfg(feature = "payouts")]
     fn to_payout_failed_response(self) -> error_stack::Result<T, errors::ApiErrorResponse> {
         self.map_err(|err| {
@@ -468,7 +502,7 @@ impl<T> ConnectorErrorExt<T> for error_stack::Result<T, errors::ConnectorError> 
                 }
                 errors::ConnectorError::NotSupported { message, connector } => {
                     errors::ApiErrorResponse::NotSupported {
-                        message: format!("{} by {}", message, connector),
+                        message: format!("{message} by {connector}"),
                     }
                 }
                 errors::ConnectorError::NotImplemented(reason) => {
@@ -504,7 +538,7 @@ impl<T> ConnectorErrorExt<T> for error_stack::Result<T, errors::ConnectorError> 
                 }
                 errors::ConnectorError::NotSupported { message, connector } => {
                     errors::ApiErrorResponse::NotSupported {
-                        message: format!("{} by {}", message, connector),
+                        message: format!("{message} by {connector}"),
                     }
                 }
                 errors::ConnectorError::NotImplemented(reason) => {
@@ -546,7 +580,7 @@ impl RedisErrorExt for error_stack::Report<errors::RedisError> {
     fn to_redis_failed_response(self, key: &str) -> error_stack::Report<errors::StorageError> {
         match self.current_context() {
             errors::RedisError::NotFound => self.change_context(
-                errors::StorageError::ValueNotFound(format!("Data does not exist for key {key}",)),
+                errors::StorageError::ValueNotFound(format!("Data does not exist for key {key}")),
             ),
             errors::RedisError::SetNxFailed => {
                 self.change_context(errors::StorageError::DuplicateValue {

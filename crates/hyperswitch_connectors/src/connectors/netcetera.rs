@@ -220,6 +220,8 @@ impl IncomingWebhook for Netcetera {
                 .unwrap_or(common_enums::TransactionStatus::InformationOnly),
             authentication_value: webhook_body.authentication_value,
             eci: webhook_body.eci,
+            challenge_cancel: webhook_body.challenge_cancel,
+            challenge_code_reason: webhook_body.trans_status_reason,
         })
     }
 }
@@ -260,7 +262,7 @@ impl ConnectorIntegration<PreAuthentication, PreAuthNRequestData, Authentication
         connectors: &Connectors,
     ) -> CustomResult<String, ConnectorError> {
         let base_url = build_endpoint(self.base_url(connectors), &req.connector_meta_data)?;
-        Ok(format!("{}/3ds/versioning", base_url,))
+        Ok(format!("{base_url}/3ds/versioning"))
     }
 
     fn get_request_body(
@@ -352,7 +354,7 @@ impl
         connectors: &Connectors,
     ) -> CustomResult<String, ConnectorError> {
         let base_url = build_endpoint(self.base_url(connectors), &req.connector_meta_data)?;
-        Ok(format!("{}/3ds/authentication", base_url,))
+        Ok(format!("{base_url}/3ds/authentication"))
     }
 
     fn get_request_body(

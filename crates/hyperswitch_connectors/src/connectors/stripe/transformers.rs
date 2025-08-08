@@ -2,7 +2,7 @@ use std::{collections::HashMap, ops::Deref};
 
 use api_models::{self, enums as api_enums, payments};
 use common_enums::{enums, AttemptStatus, PaymentChargeType, StripeChargeType};
-use common_types::payments::SplitPaymentsRequest;
+use common_types::payments::{AcceptanceType, SplitPaymentsRequest};
 use common_utils::{
     collect_missing_value_keys,
     errors::CustomResult,
@@ -13,7 +13,6 @@ use common_utils::{
 };
 use error_stack::ResultExt;
 use hyperswitch_domain_models::{
-    mandates::AcceptanceType,
     payment_method_data::{
         self, BankRedirectData, Card, CardRedirectData, GiftCardData, GooglePayWalletData,
         PayLaterData, PaymentMethodData, VoucherData, WalletData,
@@ -46,7 +45,7 @@ use url::Url;
 
 use crate::{
     constants::headers::STRIPE_COMPATIBLE_CONNECT_ACCOUNT,
-    utils::{convert_uppercase, ApplePay, ApplePayDecrypt, RouterData as OtherRouterData},
+    utils::{convert_uppercase, ApplePay, RouterData as OtherRouterData},
 };
 #[cfg(feature = "payouts")]
 pub mod connect;
@@ -591,7 +590,7 @@ pub enum StripeWallet {
 #[derive(Debug, Eq, PartialEq, Serialize)]
 pub struct StripeApplePayPredecrypt {
     #[serde(rename = "card[number]")]
-    number: Secret<String>,
+    number: cards::CardNumber,
     #[serde(rename = "card[exp_year]")]
     exp_year: Secret<String>,
     #[serde(rename = "card[exp_month]")]
@@ -750,6 +749,8 @@ impl TryFrom<enums::PaymentMethodType> for StripePaymentMethodType {
             // Stripe expects PMT as Card for Recurring Mandates Payments
             enums::PaymentMethodType::GooglePay => Ok(Self::Card),
             enums::PaymentMethodType::Boleto
+            | enums::PaymentMethodType::Paysera
+            | enums::PaymentMethodType::Skrill
             | enums::PaymentMethodType::CardRedirect
             | enums::PaymentMethodType::CryptoCurrency
             | enums::PaymentMethodType::Multibanco
@@ -759,6 +760,7 @@ impl TryFrom<enums::PaymentMethodType> for StripePaymentMethodType {
             | enums::PaymentMethodType::UpiCollect
             | enums::PaymentMethodType::UpiIntent
             | enums::PaymentMethodType::Cashapp
+            | enums::PaymentMethodType::Bluecode
             | enums::PaymentMethodType::Oxxo => Err(ConnectorError::NotImplemented(
                 get_unimplemented_payment_method_error_message("stripe"),
             )
@@ -831,7 +833,10 @@ impl TryFrom<enums::PaymentMethodType> for StripePaymentMethodType {
             | enums::PaymentMethodType::DuitNow
             | enums::PaymentMethodType::PromptPay
             | enums::PaymentMethodType::VietQr
-            | enums::PaymentMethodType::Mifinity => Err(ConnectorError::NotImplemented(
+            | enums::PaymentMethodType::IndonesianBankTransfer
+            | enums::PaymentMethodType::Flexiti
+            | enums::PaymentMethodType::Mifinity
+            | enums::PaymentMethodType::Breadpay => Err(ConnectorError::NotImplemented(
                 get_unimplemented_payment_method_error_message("stripe"),
             )
             .into()),
@@ -1066,7 +1071,9 @@ impl TryFrom<&PayLaterData> for StripePaymentMethodType {
             | PayLaterData::PayBrightRedirect {}
             | PayLaterData::WalleyRedirect {}
             | PayLaterData::AlmaRedirect {}
-            | PayLaterData::AtomeRedirect {} => Err(ConnectorError::NotImplemented(
+            | PayLaterData::FlexitiRedirect { .. }
+            | PayLaterData::AtomeRedirect {}
+            | PayLaterData::BreadpayRedirect {} => Err(ConnectorError::NotImplemented(
                 get_unimplemented_payment_method_error_message("stripe"),
             )),
         }
@@ -1120,6 +1127,9 @@ fn get_stripe_payment_method_type_from_wallet_data(
         )),
         WalletData::PaypalRedirect(_)
         | WalletData::AliPayQr(_)
+        | WalletData::BluecodeRedirect {}
+        | WalletData::Paysera(_)
+        | WalletData::Skrill(_)
         | WalletData::AliPayHkRedirect(_)
         | WalletData::MomoRedirect(_)
         | WalletData::KakaoPayRedirect(_)
@@ -1349,6 +1359,7 @@ fn create_stripe_payment_method(
             | payment_method_data::BankTransferData::BriVaBankTransfer { .. }
             | payment_method_data::BankTransferData::CimbVaBankTransfer { .. }
             | payment_method_data::BankTransferData::DanamonVaBankTransfer { .. }
+            | payment_method_data::BankTransferData::IndonesianBankTransfer { .. }
             | payment_method_data::BankTransferData::MandiriVaBankTransfer { .. } => Err(
                 ConnectorError::NotImplemented(get_unimplemented_payment_method_error_message(
                     "stripe",
@@ -1470,14 +1481,12 @@ impl TryFrom<(&WalletData, Option<PaymentMethodToken>)> for StripePaymentMethodD
                     if let Some(PaymentMethodToken::ApplePayDecrypt(decrypt_data)) =
                         payment_method_token
                     {
-                        let expiry_year_4_digit = decrypt_data.get_four_digit_expiry_year()?;
-                        let exp_month = decrypt_data.get_expiry_month()?;
-
+                        let expiry_year_4_digit = decrypt_data.get_four_digit_expiry_year();
                         Some(Self::Wallet(StripeWallet::ApplePayPredecryptToken(
                             Box::new(StripeApplePayPredecrypt {
                                 number: decrypt_data.clone().application_primary_account_number,
                                 exp_year: expiry_year_4_digit,
-                                exp_month,
+                                exp_month: decrypt_data.application_expiration_month,
                                 eci: decrypt_data.payment_data.eci_indicator,
                                 cryptogram: decrypt_data.payment_data.online_payment_cryptogram,
                                 tokenization_method: "apple_pay".to_string(),
@@ -1539,6 +1548,9 @@ impl TryFrom<(&WalletData, Option<PaymentMethodToken>)> for StripePaymentMethodD
                 .into(),
             ),
             WalletData::AliPayQr(_)
+            | WalletData::Paysera(_)
+            | WalletData::BluecodeRedirect {}
+            | WalletData::Skrill(_)
             | WalletData::AliPayHkRedirect(_)
             | WalletData::MomoRedirect(_)
             | WalletData::KakaoPayRedirect(_)
@@ -1651,7 +1663,10 @@ impl TryFrom<&GooglePayWalletData> for StripePaymentMethodData {
             token: Secret::new(
                 gpay_data
                     .tokenization_data
-                    .token
+                    .get_encrypted_google_pay_token()
+                    .change_context(ConnectorError::MissingRequiredField {
+                        field_name: "gpay wallet_token",
+                    })?
                     .as_bytes()
                     .parse_struct::<StripeGpayToken>("StripeGpayToken")
                     .change_context(ConnectorError::InvalidWalletToken {
@@ -3576,7 +3591,7 @@ fn format_metadata_for_request(merchant_metadata: Secret<Value>) -> HashMap<Stri
     let mut formatted_metadata = HashMap::new();
     if let Value::Object(metadata_map) = merchant_metadata.expose() {
         for (key, value) in metadata_map {
-            formatted_metadata.insert(format!("metadata[{}]", key), value.to_string());
+            formatted_metadata.insert(format!("metadata[{key}]"), value.to_string());
         }
     }
     formatted_metadata
@@ -4096,6 +4111,7 @@ impl
                 | payment_method_data::BankTransferData::InstantBankTransfer {}
                 | payment_method_data::BankTransferData::InstantBankTransferFinland {}
                 | payment_method_data::BankTransferData::InstantBankTransferPoland {}
+                | payment_method_data::BankTransferData::IndonesianBankTransfer { .. }
                 | payment_method_data::BankTransferData::MandiriVaBankTransfer { .. } => {
                     Err(ConnectorError::NotImplemented(
                         get_unimplemented_payment_method_error_message("stripe"),
@@ -4323,7 +4339,7 @@ fn get_transaction_metadata(
             serde_json::from_str(&metadata.peek().to_string()).unwrap_or(HashMap::new());
 
         for (key, value) in hashmap {
-            request_hash_map.insert(format!("metadata[{}]", key), value.to_string());
+            request_hash_map.insert(format!("metadata[{key}]"), value.to_string());
         }
 
         meta_data.extend(request_hash_map)
@@ -4360,10 +4376,7 @@ fn get_stripe_payments_response_data(
             res.decline_code
                 .clone()
                 .map(|decline_code| {
-                    format!(
-                        "message - {}, decline_code - {}",
-                        error_message, decline_code
-                    )
+                    format!("message - {error_message}, decline_code - {decline_code}")
                 })
                 .or(Some(error_message.clone()))
         }),
